@@ -63,8 +63,15 @@ class Group52Agent(DefaultParty):
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
-        self.top_bids_percent = 1/20
+        self.best_bids_percent = 1/100
         self.best_bids = None
+
+        # if we receive a bid with this utility value for us or above in the exploration phase,
+        # we accept it
+        self.exploration_accept_value = 0.9
+
+        # stores the best opponent's bid from our utility pov
+        self.best_received_bid = None
 
     def notifyChange(self, data: Inform):
         """
@@ -176,6 +183,11 @@ class Group52Agent(DefaultParty):
             # set bid as last received
             self.last_received_bid = bid
 
+            # update best received bid, according to my own utility
+            if (self.best_received_bid is None) or \
+                (self.profile.getUtility(bid) > self.profile.getUtility(self.best_received_bid)): 
+                self.best_received_bid = bid
+
     def my_turn(self):
         """
         This method is called when it is our turn. It should decide upon an action
@@ -207,6 +219,11 @@ class Group52Agent(DefaultParty):
     def accept_condition(self, bid: Bid) -> bool:
         if bid is None:
             return False
+        
+        # PHASE 1: EXPLORATION
+        # if we get a very good counteroffer, we accept it; otherwise never
+        if(self.progress.get(time() * 1000) < self.exploration_thresh):
+            return self.profile.getUtility(bid) >= self.exploration_accept_value
 
         # progress of the negotiation session between 0 and 1 (1 is deadline)
         progress = self.progress.get(time() * 1000)
@@ -220,6 +237,14 @@ class Group52Agent(DefaultParty):
         return all(conditions)
 
     def find_bid(self) -> Bid:
+
+        # PHASE 1: EXPLORATION
+        # if we are in the exploration phase, we pick one randomly chosen bid from 
+        # our top bids
+        if(self.progress.get(time() * 1000) < self.exploration_thresh):
+            random_bid = randint(0, len(self.best_bids)-1)
+            return self.best_bids[random_bid][0]
+
         # compose a list of all possible bids
         domain = self.profile.getDomain()
         all_bids = AllBidsList(domain)
@@ -284,5 +309,5 @@ class Group52Agent(DefaultParty):
         
         bids_utils.sort(key=lambda x: x[1], reverse=True)
 
-        number_top = ceil(number_total_bids * self.top_bids_percent)
+        number_top = ceil(number_total_bids * self.best_bids_percent)
         return bids_utils[:number_top]

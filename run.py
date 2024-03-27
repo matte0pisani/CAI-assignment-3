@@ -22,7 +22,7 @@ settings = {
             "parameters": {"storage_dir": "agent_storage/TimeDependentAgent "},
         },
         {
-            "class": "agents.template_agent.template_agent.TemplateAgent",
+            "class": "agents.group52_agent.group52_agent.Group52Agent",
             "parameters": {"storage_dir": "agent_storage/TemplateAgent"},
         },
     ],
