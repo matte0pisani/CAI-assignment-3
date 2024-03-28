@@ -57,9 +57,9 @@ class Group52Agent(DefaultParty):
 
         # the thresholds distinguish the exploration phase from the "real" negotiation one and
         # the final phase (which is in turn divided in 2 by the last variable)
-        self.exploration_thresh = 0.5
-        self.last_moments_thresh = 0.9
-        self.very_last_moments_thresh = 0.99
+        self.exploration_thresh = 0.25
+        self.last_moments_thresh = 0.85
+        self.very_last_moments_thresh = 0.975
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
@@ -81,7 +81,7 @@ class Group52Agent(DefaultParty):
         # "real" negotiation phase
         self.alpha = 0.8
         self.alpha_max = self.alpha
-        self.alpha_min = 0.5
+        self.alpha_min = 0.0
 
     def notifyChange(self, data: Inform):
         """
@@ -118,6 +118,12 @@ class Group52Agent(DefaultParty):
             self.acceptable_bids = self.build_best_bids(all_bids, self.acceptable_bids_percent)
             self.best_bids = self.build_best_bids(all_bids, self.best_bids_percent)
 
+            # only for debugging purposes
+            if self.profile.getReservationBid() is not None:
+                print('ao porco dio ci sta il reservation value!')
+                self.logger.log(logging.INFO, "reservation value is " + 
+                                str(self.profile.getUtility(self.profile.getReservationBid())))
+
         # ActionDone informs you of an action (an offer or an accept)
         # that is performed by one of the agents (including yourself).
         elif isinstance(data, ActionDone):
@@ -139,6 +145,12 @@ class Group52Agent(DefaultParty):
 
         # Finished will be send if the negotiation has ended (through agreement or deadline)
         elif isinstance(data, Finished):
+            # only for debugging purposes
+            if self.profile.getReservationBid() is not None:
+                print('ao porco dio ci sta il reservation value!')
+                self.logger.log(logging.INFO, "reservation value is " + 
+                                str(self.profile.getUtility(self.profile.getReservationBid())))
+
             self.save_data()
             # terminate the agent MUST BE CALLED
             self.logger.log(logging.INFO, "party is terminating:")
@@ -243,52 +255,52 @@ class Group52Agent(DefaultParty):
             return self.profile.getUtility(bid) >= self.exploration_accept_value
         
         # PHASE 2: "REAL" NEGOTIATION
-        if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
+        # also includes part of phase 3. Here we implement the accept next accepting strategy
+        if(progress >= self.exploration_thresh and progress < self.very_last_moments_thresh):
             return self.profile.getUtility(bid) >= self.profile.getUtility(next_bid)
-
-        # progress of the negotiation session between 0 and 1 (1 is deadline)
-
-        # very basic approach that accepts if the offer is valued above 0.7 and
-        # 95% of the time towards the deadline has passed
-        conditions = [
-            self.profile.getUtility(bid) > 0.8,
-            progress > 0.95,
-        ]
-        return all(conditions)
+        
+        # PHASE 3 (LAST PART): ACCEPT ALL
+        # if we have reached the very end without anything, I accept any incoming offer if it's
+        # better than having no deal
+        if(progress >= self.very_last_moments_thresh):
+            res_bid = self.profile.getReservationBid()
+            if res_bid is not None:
+                if self.profile.getUtility(bid) < self.profile.getUtility(res_bid):
+                    return False
+            return True
 
     def find_bid(self) -> Bid:
         progress = self.progress.get(time() * 1000)
-        self.logger.log(logging.INFO, "current progress is" + str(progress))
 
         # PHASE 1: EXPLORATION
         # if we are in the exploration phase, we pick one randomly chosen bid from 
         # our top bids
         if(progress < self.exploration_thresh):
+            self.logger.log(logging.INFO, "exploring...")
             random_bid = randint(0, len(self.best_bids)-1)
             return self.best_bids[random_bid][0]
         
         # PHASE 2: "REAL" NEGOTIATION
         # among the acceptable bids, we select the one which maximizes the score function
-        if(progress >= self.exploration_thresh and progress <= self.last_moments_thresh):
+        if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
+            self.logger.log(logging.INFO, "negotiating...")
             self.update_alpha()
             bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
             return bid[0]
-
-        # compose a list of all possible bids
-        domain = self.profile.getDomain()
-        all_bids = AllBidsList(domain)
-
-        best_bid_score = 0.0
-        best_bid = None
-
-        # take 500 attempts to find a bid according to a heuristic score
-        for _ in range(500):
-            bid = all_bids.get(randint(0, all_bids.size() - 1))
-            bid_score = self.score_bid(bid)
-            if bid_score > best_bid_score:
-                best_bid_score, best_bid = bid_score, bid
-
-        return best_bid
+        
+        # PHASE 3: LAST MOMENT BIDS
+        # if I reach the end of the time available without an agreement, I propose to the opponent
+        # the best bid he has made in the past, if it is better than the reservation value. If not,
+        # return the same thing of phase 2
+        if(progress >= self.last_moments_thresh):
+            self.logger.log(logging.INFO, "last moments...")
+            res_bid = self.profile.getReservationBid()
+            if res_bid is not None:
+                if self.profile.getUtility(self.best_received_bid) <= self.profile.getUtility(res_bid):
+                    self.update_alpha()
+                    bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
+                    return bid[0]
+            return self.best_received_bid
     
     def score(self, bid: Bid) -> float:
         """
@@ -314,34 +326,6 @@ class Group52Agent(DefaultParty):
         # self.alpha = max(0.5, self.alpha_max - ln(x+self.exploration_thresh)) # logarithmic
 
         self.logger.log(logging.INFO, "alpha value updated to" + str(self.alpha))
-
-
-    def score_bid(self, bid: Bid, alpha: float = 0.95, eps: float = 0.1) -> float:
-        """Calculate heuristic score for a bid.
-
-        Args:
-            bid (Bid): Bid to score
-            alpha (float, optional): Trade-off factor between self interested and
-                altruistic behaviour. Defaults to 0.95.
-            eps (float, optional): Time pressure factor, balances between conceding
-                and Boulware behaviour over time. Defaults to 0.1.
-
-        Returns:
-            float: score
-        """
-        progress = self.progress.get(time() * 1000)
-
-        our_utility = float(self.profile.getUtility(bid))
-
-        time_pressure = 1.0 - progress ** (1 / eps)
-        score = alpha * time_pressure * our_utility
-
-        if self.opponent_model is not None:
-            opponent_utility = self.opponent_model.get_predicted_utility(bid)
-            opponent_score = (1.0 - alpha * time_pressure) * opponent_utility
-            score += opponent_score
-
-        return score
     
     def build_best_bids(self, all_bids, percentage) -> list[tuple[Bid, float]]:
         """

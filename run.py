@@ -18,12 +18,12 @@ if not RESULTS_DIR.exists():
 settings = {
     "agents": [
         {
-            "class": "agents.time_dependent_agent.time_dependent_agent.TimeDependentAgent",
-            "parameters": {"storage_dir": "agent_storage/TimeDependentAgent "},
+            "class": "agents.CSE3210.agent2.agent2.Agent2",
+            "parameters": {"storage_dir": "agent_storage/Agent2"},
         },
         {
             "class": "agents.group52_agent.group52_agent.Group52Agent",
-            "parameters": {"storage_dir": "agent_storage/TemplateAgent"},
+            "parameters": {"storage_dir": "agent_storage/Group52Agent"},
         },
     ],
     "profiles": ["domains/domain00/profileA.json", "domains/domain00/profileB.json"],
