@@ -59,7 +59,7 @@ class Group52Agent(DefaultParty):
         # the final phase (which is in turn divided in 2 by the last variable)
         self.exploration_thresh = 0.25
         self.last_moments_thresh = 0.85
-        self.very_last_moments_thresh = 0.975
+        self.very_last_moments_thresh = 0.9
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
@@ -72,7 +72,7 @@ class Group52Agent(DefaultParty):
 
         # if we receive a bid with this utility value for us or above in the exploration phase,
         # we accept it
-        self.exploration_accept_value = 0.9
+        self.exploration_accept_value = 0.95
 
         # stores the best opponent's bid from our utility pov
         self.best_received_bid = None
@@ -81,7 +81,7 @@ class Group52Agent(DefaultParty):
         # "real" negotiation phase
         self.alpha = 0.8
         self.alpha_max = self.alpha
-        self.alpha_min = 0.0
+        self.alpha_min = 0.5
 
     def notifyChange(self, data: Inform):
         """
@@ -227,6 +227,7 @@ class Group52Agent(DefaultParty):
         if self.accept_condition(self.last_received_bid, next_bid):
             # if so, accept the offer
             action = Accept(self.me, self.last_received_bid)
+            self.send_action(action)
             return
         
         # if not, send the bid you computed before    
