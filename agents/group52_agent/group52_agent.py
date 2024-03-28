@@ -3,7 +3,7 @@ from random import randint
 from time import time
 from typing import cast
 
-from math import floor, ceil
+from math import ceil
 
 from geniusweb.actions.Accept import Accept
 from geniusweb.actions.Action import Action
@@ -63,8 +63,12 @@ class Group52Agent(DefaultParty):
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
-        self.best_bids_percent = 1/100
+        self.best_bids_percent = 1/100 # TO DO implement a better logic
         self.best_bids = None
+
+        # similar as above, but we consider a lower threshold in the second phase
+        self.acceptable_bids_percent = 1/5 # TO DO implement a better logic
+        self.acceptable_bids = None
 
         # if we receive a bid with this utility value for us or above in the exploration phase,
         # we accept it
@@ -72,6 +76,12 @@ class Group52Agent(DefaultParty):
 
         # stores the best opponent's bid from our utility pov
         self.best_received_bid = None
+
+        # these are the initial and final values for the weighted sum of utilities we have to do in the
+        # "real" negotiation phase
+        self.alpha = 0.8
+        self.alpha_max = self.alpha
+        self.alpha_min = 0.5
 
     def notifyChange(self, data: Inform):
         """
@@ -102,8 +112,11 @@ class Group52Agent(DefaultParty):
             self.domain = self.profile.getDomain()
             profile_connection.close()
 
-            # set the top bids in a local variable for later use (in bidding strategy)
-            self.best_bids = self.build_best_bids()
+            # set the acceptable bids in a local variable (in second phase of bidding strategy)
+            # set the top bids in a local variable (in first phase of bidding strategy)
+            all_bids = AllBidsList(self.domain)
+            self.acceptable_bids = self.build_best_bids(all_bids, self.acceptable_bids_percent)
+            self.best_bids = self.build_best_bids(all_bids, self.best_bids_percent)
 
         # ActionDone informs you of an action (an offer or an accept)
         # that is performed by one of the agents (including yourself).
@@ -134,7 +147,7 @@ class Group52Agent(DefaultParty):
             self.logger.log(logging.WARNING, "Ignoring unknown info " + str(data))
 
     def getCapabilities(self) -> Capabilities:
-        """MUST BE IMPLEMENTED
+        """
         Method to indicate to the protocol what the capabilities of this agent are.
         Leave it as is for the ANL 2022 competition
 
@@ -156,13 +169,13 @@ class Group52Agent(DefaultParty):
 
     # give a description of your agent
     def getDescription(self) -> str:
-        """MUST BE IMPLEMENTED
+        """
         Returns a description of your agent. 1 or 2 sentences.
 
         Returns:
             str: Agent description
         """
-        return "Template agent for the ANL 2022 competition"
+        return "Negotiating agent implementation for group 52."
 
     def opponent_action(self, action):
         """Process an action that was received from the opponent.
@@ -187,6 +200,7 @@ class Group52Agent(DefaultParty):
             if (self.best_received_bid is None) or \
                 (self.profile.getUtility(bid) > self.profile.getUtility(self.best_received_bid)): 
                 self.best_received_bid = bid
+                self.logger.log(logging.INFO, "updated best received offer to" + str(self.profile.getUtility(bid)))
 
     def my_turn(self):
         """
@@ -198,7 +212,7 @@ class Group52Agent(DefaultParty):
         next_bid = self.find_bid()
 
         # check if the last received offer is good enough
-        if self.accept_condition(self.last_received_bid):
+        if self.accept_condition(self.last_received_bid, next_bid):
             # if so, accept the offer
             action = Accept(self.me, self.last_received_bid)
             return
@@ -208,7 +222,8 @@ class Group52Agent(DefaultParty):
         self.send_action(action)
 
     def save_data(self):
-        """This method is called after the negotiation is finished. It can be used to store data
+        """
+        This method is called after the negotiation is finished. It can be used to store data
         for learning capabilities. Note that no extensive calculations can be done within this method.
         Taking too much time might result in your agent being killed, so use it for storage only.
         """
@@ -216,17 +231,22 @@ class Group52Agent(DefaultParty):
         with open(f"{self.storage_dir}/data.md", "w") as f:
             f.write(data)
 
-    def accept_condition(self, bid: Bid) -> bool:
+    def accept_condition(self, bid: Bid, next_bid: Bid) -> bool:
         if bid is None:
             return False
         
+        progress = self.progress.get(time() * 1000)
+        
         # PHASE 1: EXPLORATION
         # if we get a very good counteroffer, we accept it; otherwise never
-        if(self.progress.get(time() * 1000) < self.exploration_thresh):
+        if(progress < self.exploration_thresh):
             return self.profile.getUtility(bid) >= self.exploration_accept_value
+        
+        # PHASE 2: "REAL" NEGOTIATION
+        if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
+            return self.profile.getUtility(bid) >= self.profile.getUtility(next_bid)
 
         # progress of the negotiation session between 0 and 1 (1 is deadline)
-        progress = self.progress.get(time() * 1000)
 
         # very basic approach that accepts if the offer is valued above 0.7 and
         # 95% of the time towards the deadline has passed
@@ -237,13 +257,22 @@ class Group52Agent(DefaultParty):
         return all(conditions)
 
     def find_bid(self) -> Bid:
+        progress = self.progress.get(time() * 1000)
+        self.logger.log(logging.INFO, "current progress is" + str(progress))
 
         # PHASE 1: EXPLORATION
         # if we are in the exploration phase, we pick one randomly chosen bid from 
         # our top bids
-        if(self.progress.get(time() * 1000) < self.exploration_thresh):
+        if(progress < self.exploration_thresh):
             random_bid = randint(0, len(self.best_bids)-1)
             return self.best_bids[random_bid][0]
+        
+        # PHASE 2: "REAL" NEGOTIATION
+        # among the acceptable bids, we select the one which maximizes the score function
+        if(progress >= self.exploration_thresh and progress <= self.last_moments_thresh):
+            self.update_alpha()
+            bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
+            return bid[0]
 
         # compose a list of all possible bids
         domain = self.profile.getDomain()
@@ -260,9 +289,35 @@ class Group52Agent(DefaultParty):
                 best_bid_score, best_bid = bid_score, bid
 
         return best_bid
+    
+    def score(self, bid: Bid) -> float:
+        """
+        Calculate heuristic score for a bid. This is done by the weighted average of the agent's 
+        and the opponent's utilities. The weights of the weighted average change with time.
+        """
+        our_utility = float(self.profile.getUtility(bid))
+        opponent_utility = self.opponent_model.get_predicted_utility(bid)
+
+        return self.alpha * our_utility + (1-self.alpha) * opponent_utility
+    
+    def update_alpha(self):
+        """
+        Updates the alpha (for the score computation) with time. For now, let's just use a quadratic
+        function (but it may change: experiment with this!)
+        """
+        x = self.progress.get(time() * 1000)
+
+        # we start from 0.8 and we want to get at most to 0.5. We use a quadratic function so that
+        # when we are at 80% of the negotiation we have reached the 0.5 value for alpha.
+        # self.alpha = max(self.alpha_min, -3.25*(x**2) + 3.225*x)
+        self.alpha = max(self.alpha_min, self.alpha_max - x + self.exploration_thresh) # can try with linear
+        # self.alpha = max(0.5, self.alpha_max - ln(x+self.exploration_thresh)) # logarithmic
+
+        self.logger.log(logging.INFO, "alpha value updated to" + str(self.alpha))
+
 
     def score_bid(self, bid: Bid, alpha: float = 0.95, eps: float = 0.1) -> float:
-        """Calculate heuristic score for a bid
+        """Calculate heuristic score for a bid.
 
         Args:
             bid (Bid): Bid to score
@@ -288,26 +343,39 @@ class Group52Agent(DefaultParty):
 
         return score
     
-    def build_best_bids(self) -> list[tuple[Bid, float]]:
+    def build_best_bids(self, all_bids, percentage) -> list[tuple[Bid, float]]:
         """
             Computes the top bids available to the agent in the current domain and considering
-            its preferences. Saves the result is a state variable of the agent.
+            its preferences. Among the top bids, we never include bids which are below the reservation
+            value utility (we never want them).
 
             The logic to compute bids is (for now) only positional, meaning on all bids we take the
             first ... %.
 
             We could have used BidsWithUtils class, but it's deprecated in the docs.
         """
-        all_bids = AllBidsList(self.domain)  
-        number_total_bids = all_bids.size()
         bids_utils = []
 
-        for i in range(number_total_bids):
+        for i in range(all_bids.size()):
             bid = all_bids.get(i)
             utility = float(self.profile.getUtility(bid))
             bids_utils.append((bid, utility))
         
-        bids_utils.sort(key=lambda x: x[1], reverse=True)
+        # we exclude any bid which is lower than the reservation value (it may happen that
+        # the reservation value is high and we end up including bad bids). This if there is 
+        # a reservation value
+        if self.profile.getReservationBid() is not None:
+            bids_utils = list(filter(lambda bid: 
+                                    bid[1] > self.profile.getUtility(self.profile.getReservationBid()), 
+                                    bids_utils)
+                                    )
+        
+        bids_utils.sort(key=lambda bid: bid[1], reverse=True)
 
-        number_top = ceil(number_total_bids * self.best_bids_percent)
+        number_top = ceil(len(bids_utils) * percentage)
+
+        self.logger.log(logging.INFO, "consider only the top" + str(number_top) + "bids")
+        self.logger.log(logging.INFO, "upper bound for utility is" + str(bids_utils[0][1]))
+        self.logger.log(logging.INFO, "lower bound for utility is" + str(bids_utils[number_top][1]))
+
         return bids_utils[:number_top]

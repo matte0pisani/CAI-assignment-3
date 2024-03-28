@@ -26,7 +26,7 @@ settings = {
             "parameters": {"storage_dir": "agent_storage/TemplateAgent"},
         },
     ],
-    "profiles": ["domains/domain04/profileA.json", "domains/domain04/profileB.json"],
+    "profiles": ["domains/domain00/profileA.json", "domains/domain00/profileB.json"],
     "deadline_time_ms": 10000,
 }
 
