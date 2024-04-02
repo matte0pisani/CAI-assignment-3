@@ -18,8 +18,8 @@ if not RESULTS_DIR.exists():
 settings = {
     "agents": [
         {
-            "class": "agents.ANL2022.dreamteam109_agent.dreamteam109_agent.DreamTeam109Agent",
-            "parameters": {"storage_dir": "agent_storage/DreamTeam109Agent"},
+            "class": "agents.hardliner_agent.hardliner_agent.HardlinerAgent",
+            "parameters": {"storage_dir": "agent_storage/HardlinerAgent"},
         },
         {
             "class": "agents.group52_agent.group52_agent.Group52Agent",
