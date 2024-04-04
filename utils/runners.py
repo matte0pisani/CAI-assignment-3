@@ -148,7 +148,7 @@ def run_tournament(tournament_settings: dict) -> Tuple[list, list]:
 
 
 def process_results(results_class: SAOPState, results_dict: dict):
-    # print(results_dict)
+    print("computing metrics...")
 
     # dict to translate geniusweb agent reference to Python class name
     agent_translate = {
@@ -158,6 +158,7 @@ def process_results(results_class: SAOPState, results_dict: dict):
 
     # initialize some values
     results_summary = {"num_offers": 0, 
+                       "%_fortunate": 0,
                        "%_concession": 0,
                        "%_unfortunate": 0,
                        "%_selfish": 0,
@@ -185,13 +186,16 @@ def process_results(results_class: SAOPState, results_dict: dict):
         # I could remove some bids, otherwise it takes too much time to compute 
         # sensibility to preferences!
         dummy = []
-        reduction_factor = 0.2
+        reduction_factor = 0.5
         for i in range(int(ceil(all_bids.size()*reduction_factor))):
             dummy.append(all_bids.get(i))
         all_bids = dummy
 
         # iterate both action classes and dict entries
         actions_iter = zip(results_class.getActions(), results_dict["actions"])
+
+        # this is to compare the players current bid with the previous one
+        old_bid = None
 
         for action_class, action_dict in actions_iter:
             if "Offer" in action_dict:
@@ -214,35 +218,46 @@ def process_results(results_class: SAOPState, results_dict: dict):
 
             # if we have a move of our agent, we compute the kind of move (selfish, concession, ...)
             # and we accumulate the result for the sensibility over opponent preference metric
-            if bid is not None and "agents_group52_agent_group52_agent_Group52Agent" in offer["actor"]:
-                # print("yo")
+            agent_id_string = "agents_group52_agent_group52_agent_Group52Agent" # from debugging code
+            if bid is not None and agent_id_string in offer["actor"]:
+
                 # I retrieve if my agent is the 1st or 2nd in the current negotiation and 
                 # get his profile and the adverary's
                 idx = int(offer["actor"][-1]) - 1
                 prof_self = list(utility_funcs.values())[idx]
                 prof_other = list(utility_funcs.values())[1-idx]
 
+                # ***STUFF TO COMPUTE SENSIBILITY TO BEHAVIOUR***
+                
+                # I first compute the category of a move, considering the relationship with the previous
+                # one; then I increase the right counter
+                if old_bid is not None:
+                    classe = compute_step_class(bid, old_bid, prof_self, prof_other)
+                    if classe != "other":
+                        results_summary["%_" + classe] += 1
+                old_bid = bid
+                
+                # ***STUFF TO COMPUTE SENSIBILITY TO PREFERENCES***
+
                 # print(all_bids.size())
                 # I take all the bids which have same self utility as the current bid
                 # since there are (apparently) no 2 bids with the same exact utility, in order to compute an approximation of the 
                 # sensibility over preferences metric we also consider the other bids which are very very close in self utility (+- 0.01)
-                isocurve_bids = list(filter(lambda x: float(prof_self.getUtility(bid))-0.05 < float(prof_self.getUtility(x)) < float(prof_self.getUtility(bid))+0.05, all_bids))
-                # print(isocurve_bids)
+                tolerance = 0.03
+                isocurve_bids = list(filter(lambda x: float(prof_self.getUtility(bid))-tolerance < float(prof_self.getUtility(x)) < float(prof_self.getUtility(bid))+tolerance, all_bids))
 
                 if(len(isocurve_bids) != 0):
-                    if(len(isocurve_bids) > 1):
-                        print(len(isocurve_bids))
+                    # if(len(isocurve_bids) > 1):
+                        # print(len(isocurve_bids))
                     # I select among the isocurve bids the one which maximizes the opponent's utility
                     best_for_opp = max(isocurve_bids, key=lambda b: prof_other.getUtility(b))
-                    # print(best_for_opp)
-                    # print(bid)
-                    # print("---")
                     # I accumulate the deltas in this variable; in the end I will divide it for the number of
                     # self's bids
                     difference = prof_other.getUtility(best_for_opp)-prof_other.getUtility(bid)
                     # print(difference)
                     results_summary["sensibility_to_preferences"] += float(difference)
-                    num_offers_self += 1
+                
+                num_offers_self += 1
 
             results_summary["num_offers"] += 1
 
@@ -257,6 +272,8 @@ def process_results(results_class: SAOPState, results_dict: dict):
         utilities_final = [0, 0]
         result = "ERROR"
 
+    # ***FINAL RESULTS***
+
     for i, actor in enumerate(results_dict["connections"]):
         position = actor.split("_")[-1]
         results_summary[f"agent_{position}"] = agent_translate[actor]
@@ -268,10 +285,21 @@ def process_results(results_class: SAOPState, results_dict: dict):
     results_summary["distance_kalai_smorodisnky_point"] = dist(utilities_final[0], utilities_final[1], ks)
     minimum_distance_point = min(pof, key=lambda p: dist(utilities_final[0], utilities_final[1], p))
     results_summary["distance_pareto_optimal_frontier"] = dist(utilities_final[0], utilities_final[1], minimum_distance_point)
+    
     if num_offers_self > 0:
         results_summary["sensibility_to_preferences"] = results_summary["sensibility_to_preferences"] / num_offers_self
+        results_summary["%_fortunate"] = results_summary["%_fortunate"] / num_offers_self
+        results_summary["%_selfish"] = results_summary["%_selfish"] / num_offers_self
+        results_summary["%_concession"] = results_summary["%_concession"] / num_offers_self
+        results_summary["%_unfortunate"] = results_summary["%_unfortunate"] / num_offers_self
+        results_summary["%_nice"] = results_summary["%_nice"] / num_offers_self
+        results_summary["%_silent"] = results_summary["%_silent"] / num_offers_self
+        results_summary["sensibility_to_behaviour"] = (results_summary["%_fortunate"] + results_summary["%_concession"] + results_summary["%_nice"]) / \
+                                                        (results_summary["%_unfortunate"] + results_summary["%_selfish"] + results_summary["%_silent"])
+
     results_summary["result"] = result
 
+    print("done!")
     return results_dict, results_summary
 
 
@@ -396,3 +424,27 @@ def compute_pareto_frontier(all_bids, profile_0, profile_1):
 
 def dist(u0, u1, point):
     return sqrt((u0 - point[1]) ** 2 + (u1 - point[2]) ** 2)
+
+def compute_step_class(bid, old_bid, prof_self, prof_other):
+    u_s = prof_self.getUtility(bid)
+    u_o = prof_other.getUtility(bid)
+    u_s_old = prof_self.getUtility(old_bid)
+    u_o_old = prof_other.getUtility(old_bid)
+    tolerance = 0.05
+
+    if u_s > u_s_old and u_o > u_o_old:
+        return "fortunate"
+    if u_s > u_s_old and u_o <= u_o_old:
+        return "selfish"
+    if u_s < u_s_old and u_o >= u_o_old:
+        return "concession"
+    if u_s <= u_s_old and u_o < u_o_old:
+        return "unfortunate"
+    if (float(u_s_old) - tolerance <= float(u_s) <= float(u_s_old)) and u_o > u_o_old:
+        return "nice"
+    if (float(u_s_old) - tolerance <= float(u_s) <= float(u_s_old) + tolerance) and (float(u_o_old) - tolerance <= float(u_o) <= float(u_o_old) + tolerance):
+        return "silent"
+    
+    return "other"
+    
+    
