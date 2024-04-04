@@ -57,8 +57,8 @@ class Group52Agent(DefaultParty):
         # the thresholds distinguish the exploration phase from the "real" negotiation one and
         # the final phase (which is in turn divided in 2 by the last variable)
         self.exploration_thresh = 0.25
-        self.last_moments_thresh = 0.85
-        self.very_last_moments_thresh = 0.9
+        self.last_moments_thresh = 0.9
+        self.very_last_moments_thresh = 0.95
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
@@ -81,6 +81,15 @@ class Group52Agent(DefaultParty):
         self.alpha = 0.8
         self.alpha_max = self.alpha
         self.alpha_min = 0.5
+
+        #opponent tracker
+        self.opp_macro_change = 0
+        self.opp_micro_change = 0
+        self.macro_win = 200
+        self.micro_win = 20
+        self.opp_bid_tracker = []
+        self.macro_opp_move_type = ""
+        self.micro_opp_move_type = ""
 
     def notifyChange(self, data: Inform):
         """
@@ -204,6 +213,7 @@ class Group52Agent(DefaultParty):
             self.opponent_model.update(bid)
             # set bid as last received
             self.last_received_bid = bid
+            self.opp_bid_tracker.append(bid)
 
             # update best received bid, according to my own utility
             if (self.best_received_bid is None) or \
@@ -218,6 +228,7 @@ class Group52Agent(DefaultParty):
         """
         # we first compute the counterbid the agent wanted to do if the offer is not
         # good enough for us
+        self.analyze_negotiation_trends()
         next_bid = self.find_bid()
 
         # check if the last received offer is good enough
@@ -270,6 +281,10 @@ class Group52Agent(DefaultParty):
     def find_bid(self) -> Bid:
         progress = self.progress.get(time() * 1000)
 
+
+        # CHANGE self.score and self.enhanced_score to switch between methods
+
+
         # PHASE 1: EXPLORATION
         # if we are in the exploration phase, we pick one randomly chosen bid from 
         # our top bids
@@ -282,7 +297,7 @@ class Group52Agent(DefaultParty):
         # among the acceptable bids, we select the one which maximizes the score function
         if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
             self.logger.log(logging.INFO, "negotiating...")
-            self.update_alpha()
+            #self.update_alpha()
             bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
             return bid[0]
         
@@ -295,7 +310,7 @@ class Group52Agent(DefaultParty):
             res_bid = self.profile.getReservationBid()
             if res_bid is not None:
                 if self.profile.getUtility(self.best_received_bid) <= self.profile.getUtility(res_bid):
-                    self.update_alpha()
+                    #self.update_alpha()
                     bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
                     return bid[0]
             return self.best_received_bid
@@ -361,3 +376,63 @@ class Group52Agent(DefaultParty):
         self.logger.log(logging.INFO, "lower bound for utility is" + str(bids_utils[number_top][1]))
 
         return bids_utils[:number_top]
+
+    def analyze_negotiation_trends(self):
+            analysis_types = ['macro', 'micro']
+
+            if len(self.opp_bid_tracker) < getattr(self, f"{analysis_types[1]}_win"):
+                return
+
+            # Extract utilities from both perspectives
+            opponent_utilities = [self.opponent_model.get_predicted_utility(bid) for bid in self.opp_bid_tracker]
+            our_utilities = [self.profile.getUtility(bid) for bid in self.opp_bid_tracker]
+
+            for analysis_type in analysis_types:
+                window_size = getattr(self, f"{analysis_type}_win")
+
+                if len(self.opp_bid_tracker) < window_size:
+                    continue
+
+                opponent_avg_1 = []  # Opponent's previous utilities
+                opponent_avg_2 = []  # Opponent's most recent utilities
+                our_avg_1 = []       # Our previous utilities
+                our_avg_2 = []       # Our most recent utilities
+
+                # Calculate starting index for this window size
+                start_index = max(len(opponent_utilities) - window_size, 0)
+
+                # Loop through the bids in the current window
+                for i in range(start_index, len(opponent_utilities)):
+                    if i >= start_index + int(window_size / 2):
+                        opponent_avg_2.append(opponent_utilities[i])
+                        our_avg_2.append(our_utilities[i])
+                    else:
+                        opponent_avg_1.append(opponent_utilities[i])
+                        our_avg_1.append(our_utilities[i])
+
+                # Calculate averages for both halves of the window
+                opponent_first_avg = self.average(opponent_avg_1) 
+                opponent_second_avg = self.average(opponent_avg_2) 
+                our_first_avg = self.average(our_avg_1) 
+                our_second_avg = self.average(our_avg_2) 
+
+                # Calculate differences
+                opponent_change = opponent_second_avg - opponent_first_avg
+                our_change = our_second_avg - our_first_avg
+
+                # Determine move type
+                if opponent_change > 0 and our_change < 0:
+                    move_type = 'selfish'
+                elif opponent_change < 0 and our_change > 0:
+                    move_type = 'concession'
+                elif opponent_change > 0 and our_change > 0:
+                    move_type = 'fortunate'
+                elif opponent_change < 0 and our_change < 0:
+                    move_type = 'unfortunate'
+                else:
+                    move_type = 'neutral'
+
+                # Set the move type as an attribute for both macro and micro analysis
+                setattr(self, f"{analysis_type}_opp_move_type", move_type)
+    def average(self, arr):
+        return sum(arr)/len(arr) if arr else 0
