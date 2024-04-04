@@ -58,8 +58,8 @@ class Group52Agent(DefaultParty):
         # the thresholds distinguish the exploration phase from the "real" negotiation one and
         # the final phase (which is in turn divided in 2 by the last variable)
         self.exploration_thresh = 0.25
-        self.last_moments_thresh = 0.85
-        self.very_last_moments_thresh = 0.9
+        self.last_moments_thresh = 0.9
+        self.very_last_moments_thresh = 0.95
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
@@ -84,18 +84,13 @@ class Group52Agent(DefaultParty):
         self.alpha_min = 0.5
 
         #opponent tracker
-        self.opp_macro_change = []
-        self.opp_micro_change = []
-        self.macro_win = 100
-        self.macro_opp_avg = 0
-        self.macro_opp_std = 0
-        self.macro_diff_avg = 0
-        self.macro_diff_std = 0
-        self.micro_opp_std = 0
-        self.micro_opp_trend= 0 
-        self.micro_diff_std = 0
-        self.micro_diff_trend = 0
+        self.opp_macro_change = 0
+        self.opp_micro_change = 0
+        self.macro_win = 200
+        self.micro_win = 20
         self.opp_bid_tracker = []
+        self.macro_opp_move_type = ""
+        self.micro_opp_move_type = ""
 
     def notifyChange(self, data: Inform):
         """
@@ -236,6 +231,7 @@ class Group52Agent(DefaultParty):
         """
         # we first compute the counterbid the agent wanted to do if the offer is not
         # good enough for us
+        self.analyze_negotiation_trends()
         next_bid = self.find_bid()
 
         # check if the last received offer is good enough
@@ -304,8 +300,8 @@ class Group52Agent(DefaultParty):
         # among the acceptable bids, we select the one which maximizes the score function
         if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
             self.logger.log(logging.INFO, "negotiating...")
-            self.update_alpha()
-            bid = max(self.acceptable_bids, key=lambda bid: self.enhanced_score(bid[0]))
+            #self.update_alpha()
+            bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
             return bid[0]
         
         # PHASE 3: LAST MOMENT BIDS
@@ -317,8 +313,8 @@ class Group52Agent(DefaultParty):
             res_bid = self.profile.getReservationBid()
             if res_bid is not None:
                 if self.profile.getUtility(self.best_received_bid) <= self.profile.getUtility(res_bid):
-                    self.update_alpha()
-                    bid = max(self.acceptable_bids, key=lambda bid: self.enhanced_score(bid[0]))
+                    #self.update_alpha()
+                    bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
                     return bid[0]
             return self.best_received_bid
     
@@ -385,84 +381,61 @@ class Group52Agent(DefaultParty):
         return bids_utils[:number_top]
 
     def analyze_negotiation_trends(self):
-        if len(self.opp_bid_tracker) < self.macro_win:
-            return
+            analysis_types = ['macro', 'micro']
 
-        # Extract utilities
-        opponent_utilities = [self.opponent_model.getUtility(bid) for bid in self.opp_bid_tracker]
-        our_utilities = [self.our_model.getUtility(bid) for bid in self.opp_bid_tracker]
+            if len(self.opp_bid_tracker) < getattr(self, f"{analysis_types[1]}_win"):
+                return
 
-        # Function to calculate standard deviation
-        def calculate_standard_deviation(values):
-            """Calculate the standard deviation of utility values."""
-            if len(values) < 2:  # Standard deviation is not defined for less than 2 values
-                return 0
-            mean = sum(values) / len(values)
-            variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
-            return variance ** 0.5
+            # Extract utilities from both perspectives
+            opponent_utilities = [self.opponent_model.get_predicted_utility(bid) for bid in self.opp_bid_tracker]
+            our_utilities = [self.profile.getUtility(bid) for bid in self.opp_bid_tracker]
 
-        # Function to calculate slope (trend) of values
-        def calculate_slope(values):
-            if len(values) < 2:
-                return 0
-            mean_x = sum(range(len(values))) / len(values)
-            mean_y = sum(values) / len(values)
-            numerator = sum((x - mean_x) * (y - mean_y) for x, y in enumerate(values))
-            denominator = sum((x - mean_x) ** 2 for x in range(len(values)))
-            return numerator / denominator if denominator != 0 else 0
+            for analysis_type in analysis_types:
+                window_size = getattr(self, f"{analysis_type}_win")
 
-        # Macro analysis
-        macro_opp_avg = sum(opponent_utilities) / len(opponent_utilities)
-        macro_opp_std = calculate_standard_deviation(opponent_utilities)
+                if len(self.opp_bid_tracker) < window_size:
+                    continue
 
-        macro_diffs = [opponent_utilities[i] - our_utilities[i] for i in range(len(opponent_utilities))]
-        macro_diff_avg = sum(macro_diffs) / len(macro_diffs)
-        macro_diff_std = calculate_standard_deviation(macro_diffs)
+                opponent_avg_1 = []  # Opponent's previous utilities
+                opponent_avg_2 = []  # Opponent's most recent utilities
+                our_avg_1 = []       # Our previous utilities
+                our_avg_2 = []       # Our most recent utilities
 
-        # Micro analysis (last part of the window)
-        last_macro_opp_utilities = opponent_utilities[-self.macro_win:]
-        micro_opp_std = calculate_standard_deviation(last_macro_opp_utilities)
-        micro_opp_trend = calculate_slope(last_macro_opp_utilities)
+                # Calculate starting index for this window size
+                start_index = max(len(opponent_utilities) - window_size, 0)
 
-        last_macro_diffs = macro_diffs[-self.macro_win:]
-        micro_diff_std = calculate_standard_deviation(last_macro_diffs)
-        micro_diff_trend = calculate_slope(last_macro_diffs)
+                # Loop through the bids in the current window
+                for i in range(start_index, len(opponent_utilities)):
+                    if i >= start_index + int(window_size / 2):
+                        opponent_avg_2.append(opponent_utilities[i])
+                        our_avg_2.append(our_utilities[i])
+                    else:
+                        opponent_avg_1.append(opponent_utilities[i])
+                        our_avg_1.append(our_utilities[i])
 
-        # Update tracking with calculated values
-        self.macro_opp_avg, self.macro_opp_std = macro_opp_avg, macro_opp_std
-        self.macro_diff_avg, self.macro_diff_std = macro_diff_avg, macro_diff_std
-        self.micro_opp_std, self.micro_opp_trend = micro_opp_std, micro_opp_trend
-        self.micro_diff_std, self.micro_diff_trend = micro_diff_std, micro_diff_trend
+                # Calculate averages for both halves of the window
+                opponent_first_avg = self.average(opponent_avg_1) 
+                opponent_second_avg = self.average(opponent_avg_2) 
+                our_first_avg = self.average(our_avg_1) 
+                our_second_avg = self.average(our_avg_2) 
 
-    def enhanced_score(self, bid):
-        """
-        Calculate an enhanced heuristic score for a bid, incorporating both macro and micro analysis insights.
-        This is achieved by a dynamic weighted average of the agent's and the opponent's utilities, 
-        where weights are adjusted over time based on negotiation trends.
+                # Calculate differences
+                opponent_change = opponent_second_avg - opponent_first_avg
+                our_change = our_second_avg - our_first_avg
 
-        :param bid: The bid to evaluate.
-        :return: The calculated score for the given bid.
-        """
-        # Basic utilities
-        our_utility = float(self.profile.getUtility(bid))
-        opponent_utility = self.opponent_model.get_predicted_utility(bid)
-        
-        # Macro adjustments
-        # Alpha is adjusted based on macro-level insights (e.g., trends in utility standard deviations)
-        # A possible adjustment: if our standard deviation is low but the opponent's is high, we might prioritize our utility less
-        macro_adjustment = (self.macro_opp_std - self.macro_diff_std) / (self.macro_opp_std + self.macro_diff_std + 0.01)  # Avoid division by zero
-        alpha = self.alpha + macro_adjustment * (1 - self.alpha)  # Adjust alpha based on macro insights
+                # Determine move type
+                if opponent_change > 0 and our_change < 0:
+                    move_type = 'selfish'
+                elif opponent_change < 0 and our_change > 0:
+                    move_type = 'concession'
+                elif opponent_change > 0 and our_change > 0:
+                    move_type = 'fortunate'
+                elif opponent_change < 0 and our_change < 0:
+                    move_type = 'unfortunate'
+                else:
+                    move_type = 'neutral'
 
-        # Micro adjustments
-        # Beta reflects adjustments based on micro-level trends, such as recent changes in negotiation dynamics
-        # A possible strategy: if the trend in differences is positive, we might give more weight to opponent utility, anticipating their increasing satisfaction
-        # Also the difference and opp utility in micro sense indicates how our opponent responds to our bids
-        micro_trend_adjustment = self.micro_diff_trend  # This could be scaled or transformed as needed
-        beta = (1 - alpha) + micro_trend_adjustment * alpha  # Adjust beta based on micro insights
-
-        # Ensuring alpha and beta remain valid probabilities
-        alpha = min(max(alpha, 0), 1)
-        beta = min(max(beta, 0), 1 - alpha)
-
-        # Calculate the enhanced score
-        return alpha * our_utility + beta * opponent_utility
+                # Set the move type as an attribute for both macro and micro analysis
+                setattr(self, f"{analysis_type}_opp_move_type", move_type)
+    def average(self, arr):
+        return sum(arr)/len(arr) if arr else 0
