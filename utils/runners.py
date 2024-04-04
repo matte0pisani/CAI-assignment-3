@@ -1,7 +1,7 @@
 import shutil
 from collections import defaultdict
 from itertools import permutations
-from math import factorial, prod, sqrt
+from math import factorial, prod, sqrt, ceil
 from pathlib import Path
 from typing import Tuple
 
@@ -156,12 +156,16 @@ def process_results(results_class: SAOPState, results_dict: dict):
         for k, v in results_dict["partyprofiles"].items()
     }
 
+    # initialize some values
     results_summary = {"num_offers": 0, 
                        "%_concession": 0,
                        "%_unfortunate": 0,
                        "%_selfish": 0,
                        "%_nice": 0,
-                       "%_silent": 0}
+                       "%_silent": 0,
+                       "sensibility_to_preferences": 0,
+                       "sensibility_to_behaviour": 0}
+    num_offers_self = 0
 
     # check if there are any actions (could have crashed)
     if results_dict["actions"]:
@@ -172,8 +176,19 @@ def process_results(results_class: SAOPState, results_dict: dict):
         }
 
         # compute the Nash point, the KS point and the POF
-        np, ks, pof = compute_pareto_frontier(list(utility_funcs.values())[0], 
+        # get all possible bids in the current domain, starting from one of the
+        # profile objects
+        all_bids = AllBidsList(list(utility_funcs.values())[0].getDomain())
+        np, ks, pof = compute_pareto_frontier(all_bids, list(utility_funcs.values())[0], 
                                               list(utility_funcs.values())[1])
+        
+        # I could remove some bids, otherwise it takes too much time to compute 
+        # sensibility to preferences!
+        dummy = []
+        reduction_factor = 0.2
+        for i in range(int(ceil(all_bids.size()*reduction_factor))):
+            dummy.append(all_bids.get(i))
+        all_bids = dummy
 
         # iterate both action classes and dict entries
         actions_iter = zip(results_class.getActions(), results_dict["actions"])
@@ -196,9 +211,38 @@ def process_results(results_class: SAOPState, results_dict: dict):
                 offer["utilities"] = {
                     k: float(v.getUtility(bid)) for k, v in utility_funcs.items()
                 }
-    
-            if "agents_group52_agent_group52_agent_Group52Agent" in offer["actor"]:
-                ...
+
+            # if we have a move of our agent, we compute the kind of move (selfish, concession, ...)
+            # and we accumulate the result for the sensibility over opponent preference metric
+            if bid is not None and "agents_group52_agent_group52_agent_Group52Agent" in offer["actor"]:
+                # print("yo")
+                # I retrieve if my agent is the 1st or 2nd in the current negotiation and 
+                # get his profile and the adverary's
+                idx = int(offer["actor"][-1]) - 1
+                prof_self = list(utility_funcs.values())[idx]
+                prof_other = list(utility_funcs.values())[1-idx]
+
+                # print(all_bids.size())
+                # I take all the bids which have same self utility as the current bid
+                # since there are (apparently) no 2 bids with the same exact utility, in order to compute an approximation of the 
+                # sensibility over preferences metric we also consider the other bids which are very very close in self utility (+- 0.01)
+                isocurve_bids = list(filter(lambda x: float(prof_self.getUtility(bid))-0.05 < float(prof_self.getUtility(x)) < float(prof_self.getUtility(bid))+0.05, all_bids))
+                # print(isocurve_bids)
+
+                if(len(isocurve_bids) != 0):
+                    if(len(isocurve_bids) > 1):
+                        print(len(isocurve_bids))
+                    # I select among the isocurve bids the one which maximizes the opponent's utility
+                    best_for_opp = max(isocurve_bids, key=lambda b: prof_other.getUtility(b))
+                    # print(best_for_opp)
+                    # print(bid)
+                    # print("---")
+                    # I accumulate the deltas in this variable; in the end I will divide it for the number of
+                    # self's bids
+                    difference = prof_other.getUtility(best_for_opp)-prof_other.getUtility(bid)
+                    # print(difference)
+                    results_summary["sensibility_to_preferences"] += float(difference)
+                    num_offers_self += 1
 
             results_summary["num_offers"] += 1
 
@@ -224,6 +268,8 @@ def process_results(results_class: SAOPState, results_dict: dict):
     results_summary["distance_kalai_smorodisnky_point"] = dist(utilities_final[0], utilities_final[1], ks)
     minimum_distance_point = min(pof, key=lambda p: dist(utilities_final[0], utilities_final[1], p))
     results_summary["distance_pareto_optimal_frontier"] = dist(utilities_final[0], utilities_final[1], minimum_distance_point)
+    if num_offers_self > 0:
+        results_summary["sensibility_to_preferences"] = results_summary["sensibility_to_preferences"] / num_offers_self
     results_summary["result"] = result
 
     return results_dict, results_summary
@@ -300,16 +346,12 @@ def process_tournament_results(tournament_results):
 
     return tournament_results_summary
 
-def compute_pareto_frontier(profile_0, profile_1):    
+def compute_pareto_frontier(all_bids, profile_0, profile_1):    
     """
         Computes the POF, the Nash point and the Kalai-S... point.
         Returns the three as a triple; for NP and KS, returns the bid and the respective 
         utilities for both players; for the POF it returns a list of (bid, u1, u2) values.
     """
-
-    # get all possible bids in the current domain, starting from one of the
-    # profile objects
-    all_bids = AllBidsList(profile_0.getDomain())
 
     # initialize relevant points and pof list
     pof = []
