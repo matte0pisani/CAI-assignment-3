@@ -1,7 +1,7 @@
 import shutil
 from collections import defaultdict
 from itertools import permutations
-from math import factorial, prod
+from math import factorial, prod, sqrt
 from pathlib import Path
 from typing import Tuple
 
@@ -21,6 +21,8 @@ from pyson.ObjectMapper import ObjectMapper
 from uri.uri import URI
 
 from utils.ask_proceed import ask_proceed
+
+from geniusweb.bidspace.AllBidsList import AllBidsList
 
 
 def run_session(settings) -> Tuple[dict, dict]:
@@ -146,21 +148,32 @@ def run_tournament(tournament_settings: dict) -> Tuple[list, list]:
 
 
 def process_results(results_class: SAOPState, results_dict: dict):
+    # print(results_dict)
+
     # dict to translate geniusweb agent reference to Python class name
     agent_translate = {
         k: v["party"]["partyref"].split(".")[-1]
         for k, v in results_dict["partyprofiles"].items()
     }
 
-    results_summary = {"num_offers": 0}
+    results_summary = {"num_offers": 0, 
+                       "%_concession": 0,
+                       "%_unfortunate": 0,
+                       "%_selfish": 0,
+                       "%_nice": 0,
+                       "%_silent": 0}
 
     # check if there are any actions (could have crashed)
     if results_dict["actions"]:
-        # obtain utility functions
+        # obtain utility functions; you actually get the profile for each player
         utility_funcs = {
             k: get_utility_function(v["profile"])
             for k, v in results_dict["partyprofiles"].items()
         }
+
+        # compute the Nash point, the KS point and the POF
+        np, ks, pof = compute_pareto_frontier(list(utility_funcs.values())[0], 
+                                              list(utility_funcs.values())[1])
 
         # iterate both action classes and dict entries
         actions_iter = zip(results_class.getActions(), results_dict["actions"])
@@ -183,6 +196,9 @@ def process_results(results_class: SAOPState, results_dict: dict):
                 offer["utilities"] = {
                     k: float(v.getUtility(bid)) for k, v in utility_funcs.items()
                 }
+    
+            if "agents_group52_agent_group52_agent_Group52Agent" in offer["actor"]:
+                ...
 
             results_summary["num_offers"] += 1
 
@@ -201,8 +217,13 @@ def process_results(results_class: SAOPState, results_dict: dict):
         position = actor.split("_")[-1]
         results_summary[f"agent_{position}"] = agent_translate[actor]
         results_summary[f"utility_{position}"] = utilities_final[i]
+
     results_summary["nash_product"] = prod(utilities_final)
     results_summary["social_welfare"] = sum(utilities_final)
+    results_summary["distance_nash_point"] = dist(utilities_final[0], utilities_final[1], np)
+    results_summary["distance_kalai_smorodisnky_point"] = dist(utilities_final[0], utilities_final[1], ks)
+    minimum_distance_point = min(pof, key=lambda p: dist(utilities_final[0], utilities_final[1], p))
+    results_summary["distance_pareto_optimal_frontier"] = dist(utilities_final[0], utilities_final[1], minimum_distance_point)
     results_summary["result"] = result
 
     return results_dict, results_summary
@@ -278,3 +299,58 @@ def process_tournament_results(tournament_results):
     tournament_results_summary = tournament_results_summary[column_order]
 
     return tournament_results_summary
+
+def compute_pareto_frontier(profile_0, profile_1):    
+    """
+        Computes the POF, the Nash point and the Kalai-S... point.
+        Returns the three as a triple; for NP and KS, returns the bid and the respective 
+        utilities for both players; for the POF it returns a list of (bid, u1, u2) values.
+    """
+
+    # get all possible bids in the current domain, starting from one of the
+    # profile objects
+    all_bids = AllBidsList(profile_0.getDomain())
+
+    # initialize relevant points and pof list
+    pof = []
+    nash = None
+    ks = None
+
+    for i in range(all_bids.size()):
+        bid = all_bids.get(i)
+        u0 = float(profile_0.getUtility(bid))
+        u1 = float(profile_1.getUtility(bid))
+
+        # the point is on the pof if there in no other pof point wich dominates him.
+        # So i check that and if it's verified i add it to the list. Also for each
+        # point I check if it dominates any point in the pof list: if yes, I have to
+        # remove it
+        if len(pof) == 0:
+            pof.append((bid, u0, u1))
+        else:
+            dominating_points = list(filter(lambda p: (p[1] > u0 and p[2] >= u1) or 
+                                            (p[1] >= u0 and p[2] > u1), pof))
+            dominated_points = list(filter(lambda p: (u0 > p[1] and u1 >= p[2]) or 
+                                            (u0 >= p[1] and u1 > p[2]), pof))
+
+            pof = list(set(pof) - set(dominated_points))
+            if len(dominating_points) == 0:
+                pof.append((bid, u0, u1))
+            
+
+        # if it's the first point or if the current point is has a utilities product bigger
+        # than the one with the highest product up to now, it's the new nash product
+        if nash is None or u0*u1 > nash[1]*nash[2]:
+            nash = (bid, u0, u1)
+
+        # similarly, if I have no KS (first point) or if the ratio between the 2 current utilities
+        # is closer to 1 than that of the previous "best KS approximation", we have a new best approximation
+        # we exclude cases where u1 is 0; in that case, 0,0 would be a KS, but I think it's very unlikely that
+        # such extreme case happens
+        if u1 != 0 and (ks is None or abs(1-(u0/u1)) < abs(1-(ks[1]/ks[2]))):
+            ks = (bid, u0, u1)
+
+    return nash, ks, pof
+
+def dist(u0, u1, point):
+    return sqrt((u0 - point[1]) ** 2 + (u1 - point[2]) ** 2)

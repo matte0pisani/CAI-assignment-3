@@ -10,7 +10,6 @@ from geniusweb.actions.Action import Action
 from geniusweb.actions.Offer import Offer
 from geniusweb.actions.PartyId import PartyId
 from geniusweb.bidspace.AllBidsList import AllBidsList
-from geniusweb.bidspace.BidsWithUtility import BidsWithUtility
 from geniusweb.inform.ActionDone import ActionDone
 from geniusweb.inform.Finished import Finished
 from geniusweb.inform.Inform import Inform
@@ -119,10 +118,9 @@ class Group52Agent(DefaultParty):
             self.best_bids = self.build_best_bids(all_bids, self.best_bids_percent)
 
             # only for debugging purposes
-            if self.profile.getReservationBid() is not None:
-                print('ao porco dio ci sta il reservation value!')
-                self.logger.log(logging.INFO, "reservation value is " + 
-                                str(self.profile.getUtility(self.profile.getReservationBid())))
+            # if self.profile.getReservationBid() is not None:
+                # self.logger.log(logging.INFO, "reservation value is " + 
+                                # str(self.profile.getUtility(self.profile.getReservationBid())))
 
         # ActionDone informs you of an action (an offer or an accept)
         # that is performed by one of the agents (including yourself).
@@ -146,10 +144,9 @@ class Group52Agent(DefaultParty):
         # Finished will be send if the negotiation has ended (through agreement or deadline)
         elif isinstance(data, Finished):
             # only for debugging purposes
-            if self.profile.getReservationBid() is not None:
-                print('ao porco dio ci sta il reservation value!')
-                self.logger.log(logging.INFO, "reservation value is " + 
-                                str(self.profile.getUtility(self.profile.getReservationBid())))
+            # if self.profile.getReservationBid() is not None:
+                # self.logger.log(logging.INFO, "reservation value is " + 
+                                # str(self.profile.getUtility(self.profile.getReservationBid())))
 
             self.save_data()
             # terminate the agent MUST BE CALLED
