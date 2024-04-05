@@ -34,7 +34,7 @@ from .utils.opponent_model import OpponentModel
 
 class Group52Agent(DefaultParty):
     """
-    Template of a Python geniusweb agent.
+    A Python geniusweb agent implemented by Group 52 of the CAI course in TU Delft.
     """
 
     def __init__(self):
@@ -62,12 +62,17 @@ class Group52Agent(DefaultParty):
 
         # this represents the level from which we consider bids in the first phase; we take only
         # ... % best, according to this parameter
-        self.best_bids_percent = 1/100 # TO DO implement a better logic
+        self.best_bids_percent = 1/100
         self.best_bids = None
 
         # similar as above, but we consider a lower threshold in the second phase
-        self.acceptable_bids_percent = 1/5 # TO DO implement a better logic
+        self.acceptable_bids_percent = 1/5
         self.acceptable_bids = None
+
+        # tolerance is used when selecting bid in the second phase to give some variance.
+        # we don't simply pick the bid with the highest score, but we choose among the ones
+        # which have score closer to that, randomly
+        self.tolerance = 0.075
 
         # if we receive a bid with this utility value for us or above in the exploration phase,
         # we accept it
@@ -82,14 +87,14 @@ class Group52Agent(DefaultParty):
         self.alpha_max = self.alpha
         self.alpha_min = 0.5
 
-        #opponent tracker
-        self.opp_macro_change = 0
-        self.opp_micro_change = 0
-        self.macro_win = 200
-        self.micro_win = 20
-        self.opp_bid_tracker = []
-        self.macro_opp_move_type = ""
-        self.micro_opp_move_type = ""
+        # opponent tracker: these variables are used to track the behaviour of the opponent and 
+        # act consequently
+        self.macro_win = 100 # this and the next are the sizes of the 2 moving average windows we use to
+        self.micro_win = 10 # analyze the opponent's behaviour
+        self.opp_bid_tracker = [] # this to track the opponent's bids
+        self.macro_opp_move_type = None # this to represent the "trend" in the opponent behaviour (see later)
+        self.micro_opp_move_type = None
+        self.time_old = self.exploration_thresh # this is used to update alpha according to the opponent's behaviour
 
     def notifyChange(self, data: Inform):
         """
@@ -97,7 +102,7 @@ class Group52Agent(DefaultParty):
         How to handle the received data is based on its class type.
 
         Args:
-            info (Inform): Contains either a request for action or information.
+            data (Inform): Contains either a request for action or information.
         """
 
         # a Settings message is the first message that will be send to your
@@ -126,11 +131,6 @@ class Group52Agent(DefaultParty):
             self.acceptable_bids = self.build_best_bids(all_bids, self.acceptable_bids_percent)
             self.best_bids = self.build_best_bids(all_bids, self.best_bids_percent)
 
-            # only for debugging purposes
-            # if self.profile.getReservationBid() is not None:
-                # self.logger.log(logging.INFO, "reservation value is " + 
-                                # str(self.profile.getUtility(self.profile.getReservationBid())))
-
         # ActionDone informs you of an action (an offer or an accept)
         # that is performed by one of the agents (including yourself).
         elif isinstance(data, ActionDone):
@@ -152,11 +152,6 @@ class Group52Agent(DefaultParty):
 
         # Finished will be send if the negotiation has ended (through agreement or deadline)
         elif isinstance(data, Finished):
-            # only for debugging purposes
-            # if self.profile.getReservationBid() is not None:
-                # self.logger.log(logging.INFO, "reservation value is " + 
-                                # str(self.profile.getUtility(self.profile.getReservationBid())))
-
             self.save_data()
             # terminate the agent MUST BE CALLED
             self.logger.log(logging.INFO, "party is terminating:")
@@ -211,7 +206,8 @@ class Group52Agent(DefaultParty):
 
             # update opponent model with bid
             self.opponent_model.update(bid)
-            # set bid as last received
+            # set bid as last received and accumulate all bids in
+            # a dedicated list
             self.last_received_bid = bid
             self.opp_bid_tracker.append(bid)
 
@@ -281,9 +277,7 @@ class Group52Agent(DefaultParty):
     def find_bid(self) -> Bid:
         progress = self.progress.get(time() * 1000)
 
-
         # CHANGE self.score and self.enhanced_score to switch between methods
-
 
         # PHASE 1: EXPLORATION
         # if we are in the exploration phase, we pick one randomly chosen bid from 
@@ -297,9 +291,12 @@ class Group52Agent(DefaultParty):
         # among the acceptable bids, we select the one which maximizes the score function
         if(progress >= self.exploration_thresh and progress < self.last_moments_thresh):
             self.logger.log(logging.INFO, "negotiating...")
-            #self.update_alpha()
+            self.update_alpha()
             bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
-            return bid[0]
+            score = self.score(bid[0])
+            best_score_bids = list(filter(lambda b: score - self.tolerance <= self.score(b[0]) <= score, self.acceptable_bids))
+            random_bid = randint(0, len(best_score_bids)-1)
+            return best_score_bids[random_bid][0]
         
         # PHASE 3: LAST MOMENT BIDS
         # if I reach the end of the time available without an agreement, I propose to the opponent
@@ -310,7 +307,7 @@ class Group52Agent(DefaultParty):
             res_bid = self.profile.getReservationBid()
             if res_bid is not None:
                 if self.profile.getUtility(self.best_received_bid) <= self.profile.getUtility(res_bid):
-                    #self.update_alpha()
+                    self.update_alpha()
                     bid = max(self.acceptable_bids, key=lambda bid: self.score(bid[0]))
                     return bid[0]
             return self.best_received_bid
@@ -327,18 +324,57 @@ class Group52Agent(DefaultParty):
     
     def update_alpha(self):
         """
-        Updates the alpha (for the score computation) with time. For now, let's just use a quadratic
-        function (but it may change: experiment with this!)
+        Updates the alpha (for the score computation) with time and according to how the opponent
+        behaves. In this way we change how much we take in consideration the opponent's behaviour,
+        flexibly depending on how much the opponent has taken our interests in consideration
         """
-        x = self.progress.get(time() * 1000)
+        current_time = self.progress.get(time() * 1000)
 
-        # we start from 0.8 and we want to get at most to 0.5. We use a quadratic function so that
-        # when we are at 80% of the negotiation we have reached the 0.5 value for alpha.
-        # self.alpha = max(self.alpha_min, -3.25*(x**2) + 3.225*x)
-        self.alpha = max(self.alpha_min, self.alpha_max - x + self.exploration_thresh) # can try with linear
-        # self.alpha = max(0.5, self.alpha_max - ln(x+self.exploration_thresh)) # logarithmic
+        # we have to build a different line whose slope depends on the behaviour of the opponent.
+        # A line has to pass thru the (time_old, alpha) point, and then, with a given slope, it
+        # should compute the new alpha' in given x = time (the current time).
+        # Here we have the logic for computing m (slope)
+        m = 0.75 # default value
+        # we first classify the opponent behaviour in recent and less recent times as bad or
+        # good for us
+        if self.macro_opp_move_type is not None and self.micro_opp_move_type is not None:
+        # if they're both none, I stick to the default value
+            if self.macro_opp_move_type in ["fortunate", "concession", "nice"]:
+                macro = "good"
+            else:
+                macro = "bad"
+            if self.micro_opp_move_type in ["fortunate", "concession", "nice"]:
+                micro = "good"
+            else:
+                micro = "bad"        
+            self.logger.log(logging.INFO, f"the opponent has been acting {macro} in the last rounds")
+            self.logger.log(logging.INFO, f"the opponent has been acting {micro} in the most recent rounds")
+
+            if (micro, macro) == ("good", "good"):
+                # this means the opponent has been behaving well consistently in many of the last rounds of
+                # the negotiation; then we want to be concessive too and decrease alpha much so to 
+                # take his preferences into consideration
+                m = 1.5
+            elif (micro, macro) == ("good", "bad"):
+                # this means the opponent has been acting well consistently (remember we are working
+                # on trends not single moves) in the most recent rounds. We want to be somewhat concessive
+                # but not too much, also to trigger an intelligent response
+                m = 1
+            elif (micro, macro) == ("bad", "bad"):
+                # the opponent has been acting bad for a while and doesn't seem to help us in any way.
+                # we should treat him the same way
+                m = 0.25
+            # last case ("bad", "good"): the opponent did act well in the past, but now he's starting to act 
+            # bad. We use the default value of m here
+
+        # we compute the new alpha using a linear function. The line has the slope found before
+        # and it passes thru the previous (time, alpha) pair (computed in previous iterations).
+        # So the formula is y - alpha_old = m * (current_time - old_time).
+        # It shouldn't go below a certain threshold tho
+        self.alpha = max(self.alpha_min, self.alpha - m * (current_time - self.time_old))
 
         self.logger.log(logging.INFO, "alpha value updated to" + str(self.alpha))
+        self.time_old = current_time
     
     def build_best_bids(self, all_bids, percentage) -> list[tuple[Bid, float]]:
         """
@@ -378,18 +414,35 @@ class Group52Agent(DefaultParty):
         return bids_utils[:number_top]
 
     def analyze_negotiation_trends(self):
+            """
+            While the opponent model aims at representing the opponent's preferences and utility
+            function, this function here aims at analyzing the actual behaviour of the opponent during
+            the negotiation. To do so, we consider the most recent opponent bids and we see how on average
+            the behaviour has shifted from the first half to the second half of the bids: this by considering
+            the average utilities of both agents in the first part and comparing it with the average utilities
+            of the second part. These are compared in the same way step-wise analysis does, and
+            depending on how they change we can recognize certain "trends" in the opponent.
+            Working on the "bigger picture" instead of on individual moves allows us to characterize the 
+            opponent behaviour better, since we have better evidence of bahavioural change.
+            """
+
+            # the analysis is done on two levels of "recency"
             analysis_types = ['macro', 'micro']
 
+            # we can operate on a window of the minimum size only if we have enough collected 
+            # opponent bids
             if len(self.opp_bid_tracker) < getattr(self, f"{analysis_types[1]}_win"):
                 return
 
-            # Extract utilities from both perspectives
+            # Extract utilities from both agents, for each bid in bid_tracker
             opponent_utilities = [self.opponent_model.get_predicted_utility(bid) for bid in self.opp_bid_tracker]
             our_utilities = [self.profile.getUtility(bid) for bid in self.opp_bid_tracker]
 
             for analysis_type in analysis_types:
                 window_size = getattr(self, f"{analysis_type}_win")
 
+                # this is in case we don't have enough bids for the macro window, but we do
+                # for the micro
                 if len(self.opp_bid_tracker) < window_size:
                     continue
 
@@ -401,7 +454,8 @@ class Group52Agent(DefaultParty):
                 # Calculate starting index for this window size
                 start_index = max(len(opponent_utilities) - window_size, 0)
 
-                # Loop through the bids in the current window
+                # Loop through the bids in the current window; the first half are going
+                # to processed separately from the second half
                 for i in range(start_index, len(opponent_utilities)):
                     if i >= start_index + int(window_size / 2):
                         opponent_avg_2.append(opponent_utilities[i])
@@ -420,19 +474,25 @@ class Group52Agent(DefaultParty):
                 opponent_change = opponent_second_avg - opponent_first_avg
                 our_change = our_second_avg - our_first_avg
 
-                # Determine move type
-                if opponent_change > 0 and our_change < 0:
+                # Determine move type (actually a trend, but analyze using the
+                # DANS framework step-wise classification)
+                if opponent_change > 0 and our_change <= 0:
                     move_type = 'selfish'
-                elif opponent_change < 0 and our_change > 0:
+                elif opponent_change < 0 and our_change >= 0:
                     move_type = 'concession'
                 elif opponent_change > 0 and our_change > 0:
                     move_type = 'fortunate'
-                elif opponent_change < 0 and our_change < 0:
+                elif opponent_change <= 0 and our_change < 0:
                     move_type = 'unfortunate'
+                elif opponent_change == 0 and our_change > 0:
+                    move_type = 'nice'
+                elif opponent_change == 0 and our_change == 0:
+                    move_type = 'silent'
                 else:
                     move_type = 'neutral'
 
                 # Set the move type as an attribute for both macro and micro analysis
                 setattr(self, f"{analysis_type}_opp_move_type", move_type)
+    
     def average(self, arr):
         return sum(arr)/len(arr) if arr else 0

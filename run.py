@@ -26,7 +26,7 @@ settings = {
             "parameters": {"storage_dir": "agent_storage/Group52Agent"},
         },
     ],
-    "profiles": ["domains/domain43/profileA.json", "domains/domain43/profileB.json"],
+    "profiles": ["domains/domain05/profileA.json", "domains/domain05/profileB.json"],
     "deadline_time_ms": 10000,
 }
 

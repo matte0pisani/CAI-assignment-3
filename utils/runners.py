@@ -294,8 +294,11 @@ def process_results(results_class: SAOPState, results_dict: dict):
         results_summary["%_unfortunate"] = results_summary["%_unfortunate"] / num_offers_self
         results_summary["%_nice"] = results_summary["%_nice"] / num_offers_self
         results_summary["%_silent"] = results_summary["%_silent"] / num_offers_self
-        results_summary["sensibility_to_behaviour"] = (results_summary["%_fortunate"] + results_summary["%_concession"] + results_summary["%_nice"]) / \
-                                                        (results_summary["%_unfortunate"] + results_summary["%_selfish"] + results_summary["%_silent"])
+        if (results_summary["%_unfortunate"] + results_summary["%_selfish"] + results_summary["%_silent"]) != 0:
+            results_summary["sensibility_to_behaviour"] = (results_summary["%_fortunate"] + results_summary["%_concession"] + results_summary["%_nice"]) / \
+                                                            (results_summary["%_unfortunate"] + results_summary["%_selfish"] + results_summary["%_silent"])
+        else:
+            results_summary["sensibility_to_behaviour"] = "inf"
 
     results_summary["result"] = result
 
