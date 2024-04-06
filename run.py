@@ -18,15 +18,16 @@ if not RESULTS_DIR.exists():
 settings = {
     "agents": [
         {
-            "class": "agents.random_agent.random_agent.RandomAgent",
-            "parameters": {"storage_dir": "agent_storage/RandomAgent"},
-        },
-        {
             "class": "agents.group52_agent.group52_agent.Group52Agent",
             "parameters": {"storage_dir": "agent_storage/Group52Agent"},
         },
+        {
+            "class": "agents.hardliner_agent.hardliner_agent.HardlinerAgent",
+            "parameters": {"storage_dir": "agent_storage/HardlinerAgent"},
+        }
     ],
-    "profiles": ["domains/domain05/profileA.json", "domains/domain05/profileB.json"],
+    # "profiles": ["domains/domain45/profileA.json", "domains/domain45/profileB.json"],
+    "profiles": ["domains/domain00/profileB.json", "domains/domain00/profileA.json"],
     "deadline_time_ms": 10000,
 }
 

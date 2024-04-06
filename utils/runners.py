@@ -222,8 +222,8 @@ def process_results(results_class: SAOPState, results_dict: dict):
             if bid is not None and agent_id_string in offer["actor"]:
 
                 # I retrieve if my agent is the 1st or 2nd in the current negotiation and 
-                # get his profile and the adverary's
-                idx = int(offer["actor"][-1]) - 1
+                # get his profile and the adversary's
+                idx = (int(offer["actor"][-1]) - 1) % 2 # the % is needed when multiple executions
                 prof_self = list(utility_funcs.values())[idx]
                 prof_other = list(utility_funcs.values())[1-idx]
 

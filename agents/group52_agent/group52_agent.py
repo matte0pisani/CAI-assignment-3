@@ -76,7 +76,7 @@ class Group52Agent(DefaultParty):
 
         # if we receive a bid with this utility value for us or above in the exploration phase,
         # we accept it
-        self.exploration_accept_value = 0.95
+        self.exploration_accept_value = 0.9
 
         # stores the best opponent's bid from our utility pov
         self.best_received_bid = None
